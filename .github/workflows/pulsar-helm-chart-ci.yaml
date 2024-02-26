@@ -19,9 +19,13 @@
 
 name: Pulsar Helm Chart CI
 on:
+  push:
+    branches:
+      - master
   pull_request:
     branches:
       - master
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -37,7 +41,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Detect changed files
         id:   changes
@@ -63,13 +67,13 @@ jobs:
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
     steps:
       - name: Set up Go 1.12
-        uses: actions/setup-go@v1
+        uses: actions/setup-go@v4
         with:
           go-version: 1.12
         id: go
 
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Check license
         run: |
@@ -82,11 +86,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
-    outputs:
-      no_chart_changes: ${{ steps.ct-lint.outputs.no_chart_changes }}
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Tune Runner VM
         uses: ./.github/actions/tune-runner-vm
@@ -103,7 +107,7 @@ jobs:
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
         uses: azure/setup-helm@v3
         with:
-          version: v3.10.0
+          version: v3.12.3
 
       - name: Set up Python
         if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
@@ -121,17 +125,31 @@ jobs:
         run: |
           ct lint --check-version-increment=false \
             --validate-maintainers=false \
-            --target-branch ${{ github.event.repository.default_branch }} \
-            | tee /tmp/ct-lint.log || { 
-            if grep -q "No chart changes detected." /tmp/ct-lint.log; then
-              echo no_chart_changes=true >> $GITHUB_OUTPUT
-              exit 0
-            else
-              echo no_chart_changes=false >> $GITHUB_OUTPUT
-              exit 1
-            fi
-          }
+            --target-branch ${{ github.event.repository.default_branch }}
 
+      - name: Run kubeconform check for helm template with every major k8s version 1.21.0-1.29.0
+        if: ${{ steps.check_changes.outputs.docs_only != 'true' }}
+        run: |
+          PULSAR_CHART_HOME=$(pwd)
+          source ${PULSAR_CHART_HOME}/hack/common.sh
+          source ${PULSAR_CHART_HOME}/.ci/helm.sh
+          hack::ensure_kubectl
+          hack::ensure_helm
+          hack::ensure_kubeconform
+          ci::helm_repo_add
+          helm dependency build charts/pulsar
+          validate_helm_template_with_k8s_version() {
+            local kube_version=$1
+            echo "Validating helm template with kubeconform for k8s version $kube_version"
+            helm template charts/pulsar --set kube-prometheus-stack.enabled=false --set components.pulsar_manager=true --kube-version $kube_version | \
+              kubeconform -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -strict -kubernetes-version $kube_version -summary
+          }
+          set -o pipefail
+          for k8s_version_part in {21..29}; do
+            k8s_version="1.${k8s_version_part}.0"
+            echo "Validating helm template with kubeconform for k8s version $k8s_version"
+            validate_helm_template_with_k8s_version $k8s_version
+          done
       - name: Wait for ssh connection when build fails
         # ssh access is enabled for builds in own forks
         uses: ./.github/actions/ssh-access
@@ -141,21 +159,25 @@ jobs:
           action: wait
 
   install-chart-tests:
-    name: ${{ matrix.name }} - Install
+    name: ${{ matrix.testScenario.name }} - k8s ${{ matrix.k8sVersion.version }} - ${{ matrix.testScenario.type || 'install' }}
     runs-on: ubuntu-22.04
-    timeout-minutes: ${{ matrix.timeout || 45 }}
+    timeout-minutes: ${{ matrix.testScenario.timeout || 45 }}
     needs: ['preconditions', 'ct-lint']
     if: ${{ needs.preconditions.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Basic
-            values_file: .ci/clusters/values-local-pv.yaml
-            shortname: basic
-          - name: Pulsar Function
-            values_file: .ci/clusters/values-function.yaml
-            shortname: function
+        # see https://github.com/kubernetes-sigs/kind/releases/tag/v0.20.0 for the list of supported k8s versions for kind 0.20.0
+        k8sVersion:
+          - version: "1.21.14"
+            kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+          - version: "1.27.3"
+            kind_image_tag: v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72
+        testScenario:
+          - name: Upgrade latest released version
+            values_file: .ci/clusters/values-upgrade.yaml
+            shortname: upgrade
+            type: upgrade
           - name: Use Pulsar Image
             values_file: .ci/clusters/values-pulsar-image.yaml
             shortname: pulsar-image
@@ -180,10 +202,54 @@ jobs:
           - name: ZK & BK TLS Only
             values_file: .ci/clusters/values-zkbk-tls.yaml
             shortname: zkbk-tls
-                      
+          - name: PSP
+            values_file: .ci/clusters/values-psp.yaml
+            shortname: psp
+          - name: Pulsar Manager
+            values_file: .ci/clusters/values-pulsar-manager.yaml
+            shortname: pulsar-manager
+        include:
+          - k8sVersion:
+              version: "1.21.14"
+              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+            testScenario:
+              name: "Upgrade TLS"
+              values_file: .ci/clusters/values-tls.yaml
+              shortname: tls
+              type: upgrade
+          - k8sVersion:
+              version: "1.21.14"
+              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+            testScenario:
+              name: "Upgrade PSP"
+              values_file: .ci/clusters/values-psp.yaml
+              shortname: psp
+              type: upgrade
+          - k8sVersion:
+              version: "1.21.14"
+              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+            testScenario:
+              name: "Upgrade kube-prometheus-stack"
+              values_file: .ci/clusters/values-prometheus-grafana.yaml
+              shortname: prometheus-grafana
+              type: upgrade
+              upgradeFromVersion: 3.2.0
+          - k8sVersion:
+              version: "1.21.14"
+              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+            testScenario:
+              name: "TLS with helm 3.10.0"
+              values_file: .ci/clusters/values-tls.yaml
+              shortname: tls
+              type: install
+            helmVersion: 3.10.0
+    env:
+      k8sVersion: ${{ matrix.k8sVersion.kind_image_tag }}
+      KUBECTL_VERSION: ${{ matrix.k8sVersion.version }}
+      HELM_VERSION: ${{ matrix.helmVersion || '3.12.3' }}
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Tune Runner VM
         uses: ./.github/actions/tune-runner-vm
@@ -212,7 +278,7 @@ jobs:
             # install k9s on the fly
             if [ ! -x /usr/local/bin/k9s ]; then
               echo "Installing k9s..."
-              curl -L -s https://github.com/derailed/k9s/releases/download/v0.27.4/k9s_Linux_amd64.tar.gz | sudo tar xz -C /usr/local/bin k9s
+              curl -L -s https://github.com/derailed/k9s/releases/download/v0.29.1/k9s_Linux_amd64.tar.gz | sudo tar xz -C /usr/local/bin k9s
             fi
             command k9s "$@"
           }
@@ -231,14 +297,21 @@ jobs:
         with:
           limit-access-to-actor: true
 
-      - name: Run chart-testing (install)
+      - name: Run chart-testing (${{ matrix.testScenario.type || 'install' }}) with helm ${{ env.HELM_VERSION }}
         run: |
-          case "${{ matrix.shortname }}" in
+          case "${{ matrix.testScenario.shortname }}" in
             "jwt-symmetric")
               export SYMMETRIC=true
+              export EXTRA_SUPERUSERS=manager-admin
+              ;;
+            "jwt-asymmetric")
+              export EXTRA_SUPERUSERS=manager-admin
               ;;
           esac
-          .ci/chart_test.sh ${{ matrix.values_file }}
+          if [[ "${{ matrix.testScenario.type || 'install' }}" == "upgrade" ]]; then
+            export UPGRADE_FROM_VERSION="${{ matrix.testScenario.upgradeFromVersion || 'latest' }}"
+          fi
+          .ci/chart_test.sh ${{ matrix.testScenario.values_file }}
 
       - name: Collect k8s logs on failure
         if: ${{ cancelled() || failure() }}
@@ -254,7 +327,7 @@ jobs:
         if: ${{ cancelled() || failure() }}
         continue-on-error: true
         with:
-          name: k8s-logs-${{ matrix.shortname }}
+          name: k8s-logs-${{ matrix.testScenario.shortname }}
           path: /tmp/k8s-logs
           retention-days: 7
           if-no-files-found: ignore          
