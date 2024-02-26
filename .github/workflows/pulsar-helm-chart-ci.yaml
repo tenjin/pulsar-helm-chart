@@ -169,8 +169,8 @@ jobs:
       matrix:
         # see https://github.com/kubernetes-sigs/kind/releases/tag/v0.20.0 for the list of supported k8s versions for kind 0.20.0
         k8sVersion:
-          - version: "1.21.14"
-            kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+          - version: "1.22.17"
+            kind_image_tag: v1.22.17@sha256:f5b2e5698c6c9d6d0adc419c0deae21a425c07d81bbf3b6a6834042f25d4fba2
           - version: "1.27.3"
             kind_image_tag: v1.27.3@sha256:3966ac761ae0136263ffdb6cfd4db23ef8a83cba8a463690e98317add2c9ba72
         testScenario:
@@ -210,24 +210,24 @@ jobs:
             shortname: pulsar-manager
         include:
           - k8sVersion:
-              version: "1.21.14"
-              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+              version: "1.22.17"
+              kind_image_tag: v1.22.17@sha256:f5b2e5698c6c9d6d0adc419c0deae21a425c07d81bbf3b6a6834042f25d4fba2
             testScenario:
               name: "Upgrade TLS"
               values_file: .ci/clusters/values-tls.yaml
               shortname: tls
               type: upgrade
           - k8sVersion:
-              version: "1.21.14"
-              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+              version: "1.22.17"
+              kind_image_tag: v1.22.17@sha256:f5b2e5698c6c9d6d0adc419c0deae21a425c07d81bbf3b6a6834042f25d4fba2
             testScenario:
               name: "Upgrade PSP"
               values_file: .ci/clusters/values-psp.yaml
               shortname: psp
               type: upgrade
           - k8sVersion:
-              version: "1.21.14"
-              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+              version: "1.22.17"
+              kind_image_tag: v1.22.17@sha256:f5b2e5698c6c9d6d0adc419c0deae21a425c07d81bbf3b6a6834042f25d4fba2
             testScenario:
               name: "Upgrade kube-prometheus-stack"
               values_file: .ci/clusters/values-prometheus-grafana.yaml
@@ -235,8 +235,8 @@ jobs:
               type: upgrade
               upgradeFromVersion: 3.2.0
           - k8sVersion:
-              version: "1.21.14"
-              kind_image_tag: v1.21.14@sha256:8a4e9bb3f415d2bb81629ce33ef9c76ba514c14d707f9797a01e3216376ba093
+              version: "1.22.17"
+              kind_image_tag: v1.22.17@sha256:f5b2e5698c6c9d6d0adc419c0deae21a425c07d81bbf3b6a6834042f25d4fba2
             testScenario:
               name: "TLS with helm 3.10.0"
               values_file: .ci/clusters/values-tls.yaml
